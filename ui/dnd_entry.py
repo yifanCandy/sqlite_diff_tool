@@ -1,13 +1,31 @@
-import tkinter as tk
-from tkinterdnd2 import DND_FILES, TkinterDnD
+from PySide6.QtWidgets import QLineEdit
+from PySide6.QtCore import Qt
+import pathlib
 
-class DragDropEntry(tk.Entry):
-    def __init__(self, master, textvariable=None, **kwargs):
-        super().__init__(master, textvariable=textvariable, **kwargs)
-        self.drop_target_register(DND_FILES)
-        self.dnd_bind('<<Drop>>', self._on_drop)
+class DragDropLineEdit(QLineEdit):
+    """支持拖拽 SQLite 文件的 QLineEdit"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
 
-    def _on_drop(self, event):
-        file_path = event.data.strip('{}')  # 去掉花括号
-        self.delete(0, tk.END)
-        self.insert(0, file_path)
+    def dragEnterEvent(self, event):
+        """拖拽进入"""
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            # 只接受 .db / .sqlite / .sqlite3 文件
+            if any(url.toLocalFile().endswith(('.db', '.sqlite', '.sqlite3')) for url in urls):
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        """拖拽释放"""
+        urls = event.mimeData().urls()
+        for url in urls:
+            path = url.toLocalFile()
+            if pathlib.Path(path).suffix in ['.db', '.sqlite', '.sqlite3']:
+                self.setText(path)
+                break
+        event.acceptProposedAction()

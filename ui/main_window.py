@@ -1,120 +1,162 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox
-import pandas as pd
-from tkinterdnd2 import TkinterDnD
-from ui.dnd_entry import DragDropEntry
+from PySide6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
+    QLineEdit, QTextEdit, QPushButton, QFileDialog, QMessageBox
+)
+from PySide6.QtCore import Qt
+from .dnd_entry import DragDropLineEdit
 from core.db_utils import run_query, export_csv
 from core.diff_utils import diff_dataframe
+import sys
+import pandas as pd
 
-class SQLiteCompareApp:
+class SQLiteCompareApp(QWidget):
     def __init__(self):
-        self.root = TkinterDnD.Tk()
-        self.root.title("SQLite 差集比较工具")
-        self.root.geometry("1200x700")
+        super().__init__()
+        self.setWindowTitle("SQLite 差集比较工具")
+        self.resize(1200, 700)
+
         self.left_df = None
         self.right_df = None
-        self.create_ui()
+        self.last_diff_df = None
 
-    def create_ui(self):
-        # 顶层框架：左右部分
-        top_frame = tk.Frame(self.root)
-        top_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        self.init_ui()
 
-        left_frame = tk.LabelFrame(top_frame, text="左侧数据库", padx=10, pady=10)
-        left_frame.pack(side="left", fill="both", expand=True, padx=5)
+    def init_ui(self):
+        main_layout = QVBoxLayout(self)
 
-        right_frame = tk.LabelFrame(top_frame, text="右侧数据库", padx=10, pady=10)
-        right_frame.pack(side="right", fill="both", expand=True, padx=5)
+        # =================== 上部左右布局 ===================
+        top_layout = QHBoxLayout()
 
-        # 左侧内容
-        tk.Label(left_frame, text="数据库文件（支持拖拽）").pack(anchor="w")
-        self.left_db_path = tk.StringVar()
-        DragDropEntry(left_frame, textvariable=self.left_db_path, width=50).pack(anchor="w")
-        tk.Button(left_frame, text="选择文件", command=lambda: self.choose_file(self.left_db_path)).pack(anchor="w", pady=3)
+        # 左侧数据库组
+        left_group = QGroupBox("左侧数据库")
+        left_layout = QVBoxLayout()
+        left_layout.addWidget(QLabel("数据库文件（支持拖拽）"))
+        self.left_db_line = DragDropLineEdit()
+        left_layout.addWidget(self.left_db_line)
+        left_btn = QPushButton("选择文件")
+        left_btn.clicked.connect(lambda: self.choose_file(self.left_db_line))
+        left_layout.addWidget(left_btn)
+        left_layout.addWidget(QLabel("SQL 查询:"))
+        self.left_sql_text = QTextEdit()
+        self.left_sql_text.setFixedHeight(80)
+        left_layout.addWidget(self.left_sql_text)
+        left_exec_btn = QPushButton("执行查询")
+        left_exec_btn.clicked.connect(lambda: self.execute_query("left"))
+        left_layout.addWidget(left_exec_btn)
+        self.left_result_text = QTextEdit()
+        self.left_result_text.setReadOnly(True)
+        left_layout.addWidget(self.left_result_text)
+        left_group.setLayout(left_layout)
+        top_layout.addWidget(left_group, 1)
 
-        tk.Label(left_frame, text="SQL 查询:").pack(anchor="w", pady=(10, 0))
-        self.left_sql = tk.Text(left_frame, height=5, width=60)
-        self.left_sql.pack(fill="x")
+        # 右侧数据库组
+        right_group = QGroupBox("右侧数据库")
+        right_layout = QVBoxLayout()
+        right_layout.addWidget(QLabel("数据库文件（支持拖拽）"))
+        self.right_db_line = DragDropLineEdit()
+        right_layout.addWidget(self.right_db_line)
+        right_btn = QPushButton("选择文件")
+        right_btn.clicked.connect(lambda: self.choose_file(self.right_db_line))
+        right_layout.addWidget(right_btn)
+        right_layout.addWidget(QLabel("SQL 查询:"))
+        self.right_sql_text = QTextEdit()
+        self.right_sql_text.setFixedHeight(80)
+        right_layout.addWidget(self.right_sql_text)
+        right_exec_btn = QPushButton("执行查询")
+        right_exec_btn.clicked.connect(lambda: self.execute_query("right"))
+        right_layout.addWidget(right_exec_btn)
+        self.right_result_text = QTextEdit()
+        self.right_result_text.setReadOnly(True)
+        right_layout.addWidget(self.right_result_text)
+        right_group.setLayout(right_layout)
+        top_layout.addWidget(right_group, 1)
 
-        tk.Button(left_frame, text="执行查询", command=lambda: self.execute_query("left")).pack(pady=5)
-        self.left_result = tk.Text(left_frame, height=15)
-        self.left_result.pack(fill="both", expand=True)
+        main_layout.addLayout(top_layout)
 
-        # 右侧内容
-        tk.Label(right_frame, text="数据库文件（支持拖拽）").pack(anchor="w")
-        self.right_db_path = tk.StringVar()
-        DragDropEntry(right_frame, textvariable=self.right_db_path, width=50).pack(anchor="w")
-        tk.Button(right_frame, text="选择文件", command=lambda: self.choose_file(self.right_db_path)).pack(anchor="w", pady=3)
+        # =================== 底部布局：左侧按钮，右侧差集显示 ===================
+        bottom_layout = QHBoxLayout()
 
-        tk.Label(right_frame, text="SQL 查询:").pack(anchor="w", pady=(10, 0))
-        self.right_sql = tk.Text(right_frame, height=5, width=60)
-        self.right_sql.pack(fill="x")
+        # 左侧按钮区域
+        btn_layout_outer = QVBoxLayout()  # 外层垂直布局，用于上下居中
 
-        tk.Button(right_frame, text="执行查询", command=lambda: self.execute_query("right")).pack(pady=5)
-        self.right_result = tk.Text(right_frame, height=15)
-        self.right_result.pack(fill="both", expand=True)
+        # 添加上方伸缩，使按钮垂直居中
+        btn_layout_outer.addStretch(1)
 
-        # 底部按钮与结果框
-        bottom_frame = tk.Frame(self.root)
-        bottom_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        # 创建按钮并垂直排列
+        compare_btn = QPushButton("比较结果集（左 - 右）")
+        export_btn = QPushButton("导出差集到 CSV")
+        compare_btn.clicked.connect(self.compare_diff)
+        export_btn.clicked.connect(self.export_diff_csv)
 
-        tk.Button(bottom_frame, text="比较结果集（左 - 右）", command=self.compare_diff).pack(side="left", padx=10)
-        tk.Button(bottom_frame, text="导出差集到 CSV",  command=self.export_diff_csv).pack(side="left", padx=10)
+        btn_layout_outer.addWidget(compare_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+        btn_layout_outer.addWidget(export_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        self.diff_result = tk.Text(bottom_frame, height=10)
-        self.diff_result.pack(fill="both", expand=True, pady=10)
+        # 下方伸缩，使按钮垂直居中
+        btn_layout_outer.addStretch(1)
 
-    def choose_file(self, var):
-        path = filedialog.askopenfilename(filetypes=[("SQLite 数据库", "*.db;*.sqlite;*.sqlite3")])
+        # 左侧按钮区域占0权重
+        bottom_layout.addLayout(btn_layout_outer, 0)
+
+        # 右侧差集显示区域保持不变
+        self.diff_result_text = QTextEdit()
+        self.diff_result_text.setReadOnly(True)
+        bottom_layout.addWidget(self.diff_result_text, 1)
+
+        main_layout.addLayout(bottom_layout)
+
+    # =================== 文件选择 ===================
+    def choose_file(self, line_edit: QLineEdit):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 SQLite 数据库文件", "", "SQLite 文件 (*.db *.sqlite *.sqlite3)"
+        )
         if path:
-            var.set(path)
+            line_edit.setText(path)
 
-    def execute_query(self, side):
-        db_path = self.left_db_path.get() if side == "left" else self.right_db_path.get()
-        sql = self.left_sql.get("1.0", "end").strip() if side == "left" else self.right_sql.get("1.0", "end").strip()
+    # =================== 执行 SQL 查询 ===================
+    def execute_query(self, side: str):
+        db_path = self.left_db_line.text() if side == "left" else self.right_db_line.text()
+        sql = self.left_sql_text.toPlainText().strip() if side == "left" else self.right_sql_text.toPlainText().strip()
 
         if not db_path:
-            messagebox.showwarning("提示", "请选择数据库文件")
+            QMessageBox.warning(self, "提示", "请选择数据库文件")
             return
         if not sql:
-            messagebox.showwarning("提示", "请输入 SQL 查询语句")
+            QMessageBox.warning(self, "提示", "请输入 SQL 查询语句")
             return
 
         try:
             df = run_query(db_path, sql)
-            text_widget = self.left_result if side == "left" else self.right_result
-            text_widget.delete("1.0", "end")
-            text_widget.insert("1.0", df.to_string(index=False))
-
             if side == "left":
                 self.left_df = df
+                self.left_result_text.setText(df.to_string(index=False))
             else:
                 self.right_df = df
-
+                self.right_result_text.setText(df.to_string(index=False))
         except Exception as e:
-            messagebox.showerror("错误", str(e))
+            QMessageBox.critical(self, "错误", str(e))
 
+    # =================== 比较差集 ===================
     def compare_diff(self):
         if self.left_df is None or self.right_df is None:
-            messagebox.showwarning("提示", "请先执行两边查询")
+            QMessageBox.warning(self, "提示", "请先执行两边查询")
             return
 
         diff_df = diff_dataframe(self.left_df, self.right_df)
-        self.diff_result.delete("1.0", "end")
+        self.diff_result_text.clear()
         if diff_df.empty:
-            self.diff_result.insert("1.0", "✅ 两个结果完全一致")
+            self.diff_result_text.setText("✅ 两个结果完全一致")
+            self.last_diff_df = None
         else:
-            self.diff_result.insert("1.0", diff_df.to_string(index=False))
-            self.last_diff_df = diff_df  # 保存差集结果
+            self.diff_result_text.setText(diff_df.to_string(index=False))
+            self.last_diff_df = diff_df
 
+    # =================== 导出差集 CSV ===================
     def export_diff_csv(self):
-        if not hasattr(self, "last_diff_df"):
-            messagebox.showwarning("提示", "请先比较结果")
+        if self.last_diff_df is None:
+            QMessageBox.warning(self, "提示", "请先比较结果")
             return
-        file = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV 文件", "*.csv")])
+
+        file, _ = QFileDialog.getSaveFileName(self, "导出差集 CSV", "", "CSV 文件 (*.csv)")
         if file:
             export_csv(self.last_diff_df, file)
-            messagebox.showinfo("完成", f"差集已导出到：{file}")
-
-    def run(self):
-        self.root.mainloop()
+            QMessageBox.information(self, "完成", f"差集已导出到：{file}")
